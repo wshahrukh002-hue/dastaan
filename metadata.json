@@ -1,0 +1,7 @@
+{
+  "name": "Copy of Copy of Dastaan: Realistic Urdu AI Narrator",
+  "description": "A sophisticated Urdu text-to-speech platform designed for immersive storytelling, audiobooks, and moral tales using Gemini's most advanced TTS models.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
