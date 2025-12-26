@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Story } from './types';
+import { Story, NarratorTone, VoiceName } from './types';
 
 export const SAMPLE_STORIES: Story[] = [
   {

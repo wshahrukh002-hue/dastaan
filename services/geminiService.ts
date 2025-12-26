@@ -1,24 +1,15 @@
-import { GoogleGenAI, Modality, HarmBlockThreshold, HarmCategory } from "@google/genai";
-import { GenerationSettings, NarratorTone } from "../types";
-import lamejs from "lamejs";
 
-const MAX_CHARS = 800; // Lowered for better stability in preview
-const RETRY_ATTEMPTS = 3; // Increased retries for rate limit handling
-const BASE_RETRY_DELAY_MS = 2000;
+import { GoogleGenAI, Modality } from "@google/genai";
+import { GenerationSettings } from "../types";
 
 export const decodeBase64 = (base64: string) => {
-  try {
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
-  } catch (e) {
-    console.error("Base64 decoding failed", e);
-    throw new Error("Failed to decode audio data.");
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
+  return bytes;
 };
 
 export const decodeAudioData = async (
@@ -27,7 +18,7 @@ export const decodeAudioData = async (
   sampleRate: number,
   numChannels: number,
 ): Promise<AudioBuffer> => {
-  const dataInt16 = new Int16Array(data.buffer);
+  const dataInt16 = new Int16Array(data.buffer, data.byteOffset, data.length / 2);
   const frameCount = dataInt16.length / numChannels;
   const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
 
@@ -40,112 +31,83 @@ export const decodeAudioData = async (
   return buffer;
 };
 
-/**
- * Encodes raw PCM data into an MP3 Blob using lamejs.
- */
-export const createMp3Blob = (pcmData: Uint8Array, sampleRate: number = 24000, kbps: number = 128): Blob => {
-  const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, kbps);
-  const samples = new Int16Array(pcmData.buffer);
-  const mp3Data = [];
-  
-  const sampleBlockSize = 1152; 
-  for (let i = 0; i < samples.length; i += sampleBlockSize) {
-    const sampleChunk = samples.subarray(i, i + sampleBlockSize);
-    const mp3buf = mp3encoder.encodeBuffer(sampleChunk);
-    if (mp3buf.length > 0) {
-      mp3Data.push(mp3buf);
+export const createWavBlob = (pcmData: Uint8Array, sampleRate: number = 24000): Blob => {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+
+  const writeString = (offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
     }
-  }
-  
-  const finalBuf = mp3encoder.flush();
-  if (finalBuf.length > 0) {
-    mp3Data.push(finalBuf);
-  }
-  
-  return new Blob(mp3Data, { type: 'audio/mp3' });
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + pcmData.length, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, 'data');
+  view.setUint32(40, pcmData.length, true);
+
+  return new Blob([header, pcmData], { type: 'audio/wav' });
 };
 
 export class GeminiSpeechService {
-  private getGeminiVoiceName(voiceId: string): string {
-    const mapping: Record<string, string> = {
-      zephyr: 'Zephyr',
-      ayaan: 'Kore',
-      hamna: 'Puck',
-      noor: 'Charon'
-    };
-    return mapping[voiceId] || 'Zephyr';
-  }
-
-  private async sleep(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
   async generateUrduSpeech(text: string, settings: GenerationSettings): Promise<string> {
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      throw new Error("API Key is missing.");
-    }
+    // ALWAYS create a fresh instance right before making an API call 
+    // to ensure it uses the most up-to-date API key from the environment/dialog.
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    const prompt = `Speak the following Urdu text clearly as a ${settings.tone} narrator. Output only the audio: ${text}`;
 
-    const sanitizedText = text.replace(/\n+/g, ' ').trim();
-    if (!sanitizedText) {
-      throw new Error("Text is empty.");
-    }
-
-    if (sanitizedText.length > MAX_CHARS) {
-      throw new Error(`Text is too long (${sanitizedText.length} chars). Max allowed for high-quality preview is ${MAX_CHARS} characters.`);
-    }
-
-    const toneStyle = this.getStyleFromTone(settings.tone);
-    const apiVoiceName = this.getGeminiVoiceName(settings.voice);
-
-    const callApi = async (attempt: number): Promise<string> => {
-      try {
-        const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash-preview-tts",
-          contents: [{ parts: [{ text: sanitizedText }] }],
-          config: {
-            systemInstruction: `Narration Task: Read the provided Urdu text. 
-Tone: ${toneStyle}. 
-Voice: ${apiVoiceName}. 
-Output: Audio ONLY. No introductory remarks.`,
-            responseModalities: [Modality.AUDIO],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: { voiceName: apiVoiceName },
-              },
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: settings.voice },
             },
-            safetySettings: [
-              { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-              { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-              { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-              { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-            ],
           },
-        });
+        },
+      });
 
-        const candidate = response.candidates?.[0];
-        if (!candidate || candidate.finishReason === 'OTHER' || candidate.finishReason === 'RECITATION') {
-          throw new Error(`Finish Reason: ${candidate?.finishReason || 'Unknown'}`);
+      if (!response.candidates || response.candidates.length === 0) {
+        throw new Error("Empty response from AI.");
+      }
+
+      const candidate = response.candidates[0];
+      
+      if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+        throw new Error(`Generation interrupted: ${candidate.finishReason}`);
+      }
+
+      let base64Audio = '';
+      if (candidate.content && candidate.content.parts) {
+        for (const part of candidate.content.parts) {
+          if (part.inlineData && part.inlineData.data) {
+            base64Audio = part.inlineData.data;
+            break;
+          }
         }
+      }
 
-        const part = candidate.content?.parts?.find(p => p.inlineData);
-        const base64Audio = part?.inlineData?.data;
+      if (!base64Audio) {
+        throw new Error("Speech data not found in response parts.");
+      }
 
-        if (!base64Audio) {
-          throw new Error("Empty audio response.");
-        }
-
-        return base64Audio;
-      } catch (error: any) {
-        const errorMsg = error.message || "";
-        const isTransient = errorMsg.includes('500') || 
-                          errorMsg.includes('INTERNAL') || 
-                          errorMsg.includes('OTHER');
-        const isRateLimit = errorMsg.includes('429') || 
-                           errorMsg.includes('RESOURCE_EXHAUSTED') || 
-                           errorMsg.includes('quota');
-        
-        if ((isTransient || isRateLimit) && attempt < RETRY_ATTEMPTS) {
-          // Use exponential backoff for rate limits
-          const delay = isRateLimit
+      return base64Audio;
+    } catch (error: any) {
+      // Re-throw raw error message for App.tsx to parse and detect status codes
+      throw error;
+    }
+  }
+}

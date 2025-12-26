@@ -1,20 +1,17 @@
 
-export type VoiceId = string;
-
-export enum NarratorTone {
-  Bedtime = 'Soft Bedtime Voice (Calm & Soothing)',
-  Dramatic = 'Deep & Dramatic (Cinematic)',
-  Calm = 'Calm & Steady (Audiobook Style)',
-  Reflective = 'Reflective & Philosophical',
-  Emotional = 'Emotional & Touching Storytelling',
-  Kids = 'Kids Friendly Tone (Energetic & Fun)',
+export enum VoiceName {
+  Kore = 'Kore',
+  Puck = 'Puck',
+  Charon = 'Charon',
+  Fenrir = 'Fenrir',
+  Zephyr = 'Zephyr',
 }
 
-export interface Character {
-  id: string;
-  name: string;
-  voice: VoiceId;
-  tone: NarratorTone;
+export enum NarratorTone {
+  Bedtime = 'Bedtime Story (Gentle & Slow)',
+  Dramatic = 'Dramatic (Expressive & Cinematic)',
+  Calm = 'Calm & Steady (Audiobook Style)',
+  Reflective = 'Reflective & Philosophical',
 }
 
 export interface Story {
@@ -25,9 +22,15 @@ export interface Story {
 }
 
 export interface GenerationSettings {
-  voice: VoiceId;
+  voice: VoiceName;
   tone: NarratorTone;
   backgroundMusic: string;
-  audioQuality: number;
-  characterId?: string;
+}
+
+export interface SavedProject {
+  id: string;
+  title: string;
+  content: string;
+  settings: GenerationSettings;
+  timestamp: number;
 }
